@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+/frontend/build/
+/backend/dist/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Database (runtime file, not committed)
+backend/database/security.db.json
+
+# Uploaded log files (transient)
+backend/uploads/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing
+coverage/
+
+# React dev
+.eslintcache
