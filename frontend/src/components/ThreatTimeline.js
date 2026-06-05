@@ -58,7 +58,6 @@ export default function ThreatTimeline({ threats = [] }) {
     const timed = pts.filter(p => p._ms !== null && isFinite(p._ms));
 
     if (timed.length < 2) {
-      // Fall back to index-based
       return {
         points: pts.map((t, i) => ({
           ...t,
@@ -112,6 +111,14 @@ export default function ThreatTimeline({ threats = [] }) {
             const label = t._ms !== null
               ? `${fmtTime(t._ms)} · ${t.threat_type} · ${t.source_ip || '?'}`
               : `#${t._i + 1} · ${t.threat_type} · ${t.source_ip || '?'}`;
+
+            // Smart tooltip alignment: pin to left edge for early dots, right edge for late dots
+            const tooltipStyle = t._pct < 20
+              ? { left: 0, right: 'auto', transform: 'none' }
+              : t._pct > 80
+              ? { left: 'auto', right: 0, transform: 'none' }
+              : { left: '50%', right: 'auto', transform: 'translateX(-50%)' };
+
             return (
               <div
                 key={t.id || idx}
@@ -120,7 +127,7 @@ export default function ThreatTimeline({ threats = [] }) {
                 title={label}
               >
                 <div className="tl-dot-large" />
-                <div className="tl-tooltip">
+                <div className="tl-tooltip" style={tooltipStyle}>
                   <div className="tl-tt-type">{t.threat_type}</div>
                   {t.source_ip && <div className="tl-tt-meta"><span className="tl-tt-ip">{t.source_ip}</span></div>}
                   {t._ms !== null && (

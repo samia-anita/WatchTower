@@ -17,13 +17,13 @@ function riskColor(s) {
   return '#10b981';
 }
 
-export default function Sidebar({ backendOnline, ollamaStatus, activePage, onNavigate, onLoadScan }) {
+export default function Sidebar({ backendOnline, groqStatus, activePage, onNavigate, onLoadScan }) {
   const [scans, setScans]     = useState([]);
   const [histOpen, setHistOpen] = useState(true);
   const [loading, setLoading]  = useState(false);
 
-  const ollamaClass = ollamaStatus === 'online' ? 'online' : ollamaStatus === 'checking' ? 'warn' : 'offline';
-  const ollamaLabel = ollamaStatus === 'online' ? 'Online' : ollamaStatus === 'checking' ? 'Checking' : 'Offline';
+  const groqClass = groqStatus === 'online' ? 'online' : groqStatus === 'checking' ? 'warn' : 'offline';
+  const groqLabel = groqStatus === 'online' ? 'Online' : groqStatus === 'checking' ? 'Checking' : 'Offline';
 
   useEffect(() => {
     if (!backendOnline) return;
@@ -133,8 +133,8 @@ export default function Sidebar({ backendOnline, ollamaStatus, activePage, onNav
           <span className={`sys-status-val ${backendOnline ? 'online' : 'offline'}`}>{backendOnline ? 'Online' : 'Offline'}</span>
         </div>
         <div className="sys-status-row">
-          <div className="sys-status-label"><span className={`status-dot ${ollamaClass}`} />LLM Engine</div>
-          <span className={`sys-status-val ${ollamaClass}`}>{ollamaLabel}</span>
+          <div className="sys-status-label"><span className={`status-dot ${groqClass}`} />LLM Engine</div>
+          <span className={`sys-status-val ${groqClass}`}>{groqLabel}</span>
         </div>
         <div style={{ marginTop: 10, padding: '6px 10px', background: 'var(--bg-elevated)', borderRadius: 6, border: '1px solid var(--border)', fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-dim)', textAlign: 'center', letterSpacing: '0.05em' }}>
           v1.0.0 · On-Device Analysis

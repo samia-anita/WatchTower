@@ -1272,7 +1272,7 @@ code {
   font-weight: 600; letter-spacing: 0.05em;
 }
 .tl-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.timeline-track-wrap { position: relative; padding: 20px 0 8px; margin-bottom: 4px; }
+.timeline-track-wrap { position: relative; padding: 20px 0 8px; margin-bottom: 4px; overflow: visible; }
 .timeline-axis {
   position: absolute; bottom: 8px; left: 0; right: 0;
   height: 2px; background: var(--bg-elevated); border-radius: 1px;
@@ -1297,9 +1297,10 @@ code {
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   border-radius: 8px; padding: 8px 10px;
-  min-width: 140px; opacity: 0; pointer-events: none;
-  transition: opacity 0.15s ease; z-index: 10;
+  min-width: 140px; max-width: 200px; opacity: 0; pointer-events: none;
+  transition: opacity 0.15s ease; z-index: 100;
   box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  white-space: nowrap;
 }
 .tl-event:hover .tl-tooltip { opacity: 1; }
 .tl-tt-type { font-size: 11px; font-weight: 700; color: var(--text-primary); margin-bottom: 4px; }

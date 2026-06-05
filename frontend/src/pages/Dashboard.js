@@ -10,7 +10,7 @@ import ThreatTimeline   from '../components/ThreatTimeline';
 import { useToast }     from '../components/Toast';
 import {
   uploadLogFile, runAiAnalysis, downloadReport,
-  checkOllamaHealth, checkBackendHealth,
+  checkGroqHealth, checkBackendHealth,
   getScanData,
 } from '../services/api';
 
@@ -167,7 +167,7 @@ function HomePage({ onNavigate, scanResult }) {
             {[
               { step: '01', title: 'Upload Log',      desc: 'Drop a .log or .txt file — or paste raw log text directly.', color: 'var(--blue)' },
               { step: '02', title: 'Parse & Detect',  desc: 'The engine parses every log line and runs 4 threat detectors.', color: 'var(--purple)' },
-              { step: '03', title: 'AI Analysis',     desc: 'A local LLM (Ollama) generates an expert threat narrative.', color: 'var(--cyan)' },
+              { step: '03', title: 'AI Analysis',     desc: 'Groq AI generates an expert threat narrative with detailed recommendations.', color: 'var(--cyan)' },
               { step: '04', title: 'Report & History',desc: 'Export a PDF report — all scans saved to history automatically.', color: 'var(--green)' },
             ].map(s => (
               <div key={s.step} style={{ display: 'flex', gap: 14 }}>
@@ -386,9 +386,9 @@ function DashboardPage({ scanResult, aiResult, aiError, stage, downloading, onRe
             <div className="card-inner"><ThreatChart byType={scanResult.summary?.byType || {}} /></div>
           </div>
 
-          <div className="card card-glow-purple">
+          <div className="card card-glow-purple" style={{ flex: 1 }}>
             <div className="card-header"><div className="card-title"><Ico d={I.file} size={13} />Executive Summary</div></div>
-            <div className="card-inner">
+            <div className="card-inner" style={{ display: 'flex', flexDirection: 'column' }}>
               <ExecutiveSummary summary={aiResult?.executive_summary} loading={stage === STAGE.AI && !aiResult} />
             </div>
           </div>
@@ -511,7 +511,7 @@ function ReportsPage({ scanResult, aiResult, downloading, onReport, onReset }) {
 }
 
 /* ── SETTINGS PAGE ───────────────────────────────────────────── */
-function SettingsPage({ backendOnline, ollamaStatus }) {
+function SettingsPage({ backendOnline, groqStatus }) {
   return (
     <div className="anim-fade-up">
       <div className="card">
@@ -528,7 +528,7 @@ function SettingsPage({ backendOnline, ollamaStatus }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {[
               { label: 'Backend API',          desc: 'Express server on port 3001',                               status: backendOnline ? 'Connected' : 'Disconnected',              ok: backendOnline },
-              { label: 'LLM Engine (Ollama)',  desc: 'Local language model for AI analysis',                     status: ollamaStatus === 'online' ? 'Connected' : ollamaStatus === 'checking' ? 'Checking...' : 'Offline — rule-based fallback active', ok: ollamaStatus === 'online' },
+              { label: 'LLM Engine (Groq)',   desc: 'Cloud language model API for AI analysis',                    status: groqStatus === 'online' ? 'Connected' : groqStatus === 'checking' ? 'Checking...' : 'Offline — rule-based fallback active', ok: groqStatus === 'online' },
               { label: 'Database',             desc: 'SQLite via sql.js — stores scans, events, threats, AI',    status: 'Active',                                                  ok: true },
               { label: 'Upload Limit',         desc: 'Maximum file size for log uploads',                        status: '10 MB',                                                   ok: true },
               { label: 'Accepted Formats',     desc: 'File extensions accepted for analysis',                    status: '.log and .txt',                                           ok: true },
@@ -565,13 +565,31 @@ export default function Dashboard() {
   const [aiError,       setAiError]       = useState(null);
   const [downloading,   setDownloading]   = useState(false);
   const [backendOnline, setBackendOnline] = useState(false);
-  const [ollamaStatus,  setOllamaStatus]  = useState('checking');
+  const [groqStatus,    setGroqStatus]    = useState('checking');
   const [activePage,    setActivePage]    = useState('home');
 
   useEffect(() => {
     checkBackendHealth().then(h => setBackendOnline(!!h));
-    checkOllamaHealth().then(h => setOllamaStatus(h.available ? 'online' : 'offline'));
+    checkGroqHealth().then(h => setGroqStatus(h.available ? 'online' : 'offline'));
   }, []);
+
+  // When navigating to dashboard/reports/threats while a scan is loaded but AI hasn't run yet, fetch AI
+  useEffect(() => {
+    if (
+      (activePage === 'dashboard' || activePage === 'reports') &&
+      scanResult?.scanId &&
+      !aiResult &&
+      !aiError &&
+      stage === STAGE.DONE
+    ) {
+      runAiAnalysis(
+        scanResult.scanId, scanResult.threats,
+        { filename: scanResult.filename, overall_risk_score: scanResult.overallRiskScore, total_events: scanResult.totalEvents }
+      )
+        .then(data => setAiResult(data))
+        .catch(err => setAiError(err.response?.data?.error || err.message || 'AI analysis failed'));
+    }
+  }, [activePage, scanResult, aiResult, aiError, stage]);
 
   const reset = useCallback(() => {
     setFile(null); setStage(STAGE.IDLE); setError(null);
@@ -655,7 +673,7 @@ export default function Dashboard() {
     <div className="app-shell">
       <Sidebar
         backendOnline={backendOnline}
-        ollamaStatus={ollamaStatus}
+        groqStatus={groqStatus}
         activePage={activePage}
         onNavigate={handleNavigate}
         onLoadScan={handleLoadScan}
@@ -700,7 +718,7 @@ export default function Dashboard() {
               onReset={reset}
             />
           )}
-          {activePage === 'settings'  && <SettingsPage backendOnline={backendOnline} ollamaStatus={ollamaStatus} />}
+          {activePage === 'settings'  && <SettingsPage backendOnline={backendOnline} groqStatus={groqStatus} />}
         </div>
 
         <footer className="app-footer">

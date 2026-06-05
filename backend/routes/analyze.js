@@ -3,7 +3,7 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 
 const { getDb, query, run } = require('../database/init');
-const { generateSecurityAnalysis, checkOllamaHealth } = require('../services/ollamaService');
+const { generateSecurityAnalysis, checkGroqHealth } = require('../services/groqService');
 
 // POST /api/analyze-ai
 router.post('/', async (req, res) => {
@@ -16,22 +16,28 @@ router.post('/', async (req, res) => {
   try {
     await getDb();
 
-    // Check if analysis already exists
     const existing = query('SELECT * FROM ai_analyses WHERE scan_id = ?', [scanId]);
     if (existing.length > 0) {
       const a = existing[0];
-      return res.json({
-        success: true,
-        cached: true,
-        explanation: a.explanation,
-        risk_assessment: a.risk_assessment,
-        recommendation: a.recommendation,
-        executive_summary: a.executive_summary,
-        model_used: a.model_used,
-      });
+      // If cached result came from a weak/small model, bust the cache and re-run
+      // so users automatically get richer analysis when a better model is now available.
+      const weakModels = ['llama-3.1-8b-instant', 'llama3-8b-8192', 'gemma2-9b-it', 'rule-based-fallback'];
+      const isWeak = weakModels.some(m => (a.model_used || '').includes(m));
+      if (!isWeak) {
+        return res.json({
+          success: true,
+          cached: true,
+          explanation: a.explanation,
+          risk_assessment: a.risk_assessment,
+          recommendation: a.recommendation,
+          executive_summary: a.executive_summary,
+          model_used: a.model_used,
+        });
+      }
+      // Bust stale cache so we re-generate with a stronger model
+      run('DELETE FROM ai_analyses WHERE scan_id = ?', [scanId]);
     }
 
-    // Get scan record if not provided
     let meta = scanMeta;
     if (!meta) {
       const scans = query('SELECT * FROM scans WHERE id = ?', [scanId]);
@@ -42,24 +48,26 @@ router.post('/', async (req, res) => {
       }
     }
 
-    // Get threats if not provided
     let threatData = threats;
     if (!threatData || threatData.length === 0) {
       threatData = query('SELECT * FROM threats WHERE scan_id = ?', [scanId]);
     }
 
-    // Generate AI analysis (with fallback built-in)
     const analysis = await generateSecurityAnalysis(threatData, meta);
 
-    // Save to DB
     const analysisId = uuidv4();
     run(
       `INSERT INTO ai_analyses (id, scan_id, explanation, risk_assessment, recommendation, executive_summary, model_used)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [analysisId, scanId,
-       analysis.explanation, analysis.risk_assessment,
-       analysis.recommendation, analysis.executive_summary,
-       analysis.model_used]
+      [
+        analysisId,
+        scanId,
+        analysis.explanation,
+        analysis.risk_assessment,
+        analysis.recommendation,
+        analysis.executive_summary,
+        analysis.model_used,
+      ]
     );
 
     return res.json({
@@ -71,16 +79,14 @@ router.post('/', async (req, res) => {
       executive_summary: analysis.executive_summary,
       model_used: analysis.model_used,
     });
-
   } catch (err) {
     console.error('AI analysis error:', err);
     return res.status(500).json({ error: err.message || 'AI analysis failed' });
   }
 });
 
-// GET /api/analyze-ai/health
 router.get('/health', async (req, res) => {
-  const health = await checkOllamaHealth();
+  const health = await checkGroqHealth();
   res.json(health);
 });
 

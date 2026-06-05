@@ -76,7 +76,7 @@ export async function getScanData(scanId) {
   };
 }
 
-export async function checkOllamaHealth() {
+export async function checkGroqHealth() {
   try {
     const response = await API.get('/analyze-ai/health');
     return response.data;
