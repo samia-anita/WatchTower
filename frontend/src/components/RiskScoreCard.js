@@ -1,82 +1,88 @@
 import React from 'react';
 
-function getRiskColor(score) {
-  if (score >= 75) return 'var(--severity-critical)';
-  if (score >= 50) return 'var(--severity-high)';
-  if (score >= 25) return 'var(--severity-medium)';
-  return 'var(--accent-green)';
+function getRiskColor(s) {
+  if (s >= 75) return '#ef4444';
+  if (s >= 50) return '#f97316';
+  if (s >= 25) return '#eab308';
+  return '#10b981';
 }
 
-function getRiskGrade(score) {
-  if (score >= 75) return { label: 'CRITICAL', bg: 'rgba(240,65,65,0.12)',  color: '#f87171' };
-  if (score >= 50) return { label: 'HIGH',     bg: 'rgba(244,123,48,0.12)', color: '#fb923c' };
-  if (score >= 25) return { label: 'MEDIUM',   bg: 'rgba(232,185,48,0.12)', color: '#fbbf24' };
-  return                   { label: 'LOW',     bg: 'rgba(34,197,94,0.12)',  color: '#86efac' };
+function getRiskGrade(s) {
+  if (s >= 75) return { label: 'CRITICAL', bg: 'rgba(239,68,68,0.12)',  color: '#f87171', border: 'rgba(239,68,68,0.25)' };
+  if (s >= 50) return { label: 'HIGH',     bg: 'rgba(249,115,22,0.12)', color: '#fb923c', border: 'rgba(249,115,22,0.25)' };
+  if (s >= 25) return { label: 'MEDIUM',   bg: 'rgba(234,179,8,0.12)',  color: '#fbbf24', border: 'rgba(234,179,8,0.25)' };
+  return              { label: 'LOW',      bg: 'rgba(16,185,129,0.12)', color: '#6ee7b7', border: 'rgba(16,185,129,0.25)' };
 }
 
 export default function RiskScoreCard({ score, totalThreats, totalEvents, filename }) {
-  const safeScore        = isFinite(score) ? Math.max(0, Math.min(100, score)) : 0;
-  const safeTotalThreats = totalThreats ?? 0;
-  const safeTotalEvents  = totalEvents  ?? 0;
+  const s    = isFinite(score) ? Math.max(0, Math.min(100, score)) : 0;
+  const ths  = totalThreats ?? 0;
+  const evs  = totalEvents  ?? 0;
+  const col  = getRiskColor(s);
+  const grade = getRiskGrade(s);
 
-  const color = getRiskColor(safeScore);
-  const grade = getRiskGrade(safeScore);
-
-  const radius       = 52;
-  const circumference = 2 * Math.PI * radius;
-  const offset       = circumference - (safeScore / 100) * circumference;
+  const r   = 54;
+  const circ = 2 * Math.PI * r;
+  const off  = circ - (s / 100) * circ;
 
   return (
-    <div className="card" style={{ textAlign: 'center' }}>
-      <div className="card-header" style={{ justifyContent: 'center', borderBottom: 'none', marginBottom: 8, paddingBottom: 0 }}>
-        <span className="card-title">Risk Score</span>
-      </div>
-
-      {/* Ring */}
-      <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', margin: '4px 0' }}>
-        <svg width="136" height="136" style={{ transform: 'rotate(-90deg)' }}>
-          <circle cx="68" cy="68" r={radius} fill="none" stroke="var(--bg-elevated)" strokeWidth="7" />
-          <circle
-            cx="68" cy="68" r={radius}
-            fill="none"
-            stroke={color}
-            strokeWidth="7"
-            strokeDasharray={circumference}
-            strokeDashoffset={offset}
-            strokeLinecap="round"
-            style={{ transition: 'stroke-dashoffset 0.8s ease' }}
-          />
-        </svg>
-        <div style={{ position: 'absolute', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-          <div className="risk-score-value" style={{ color }}>{safeScore}</div>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-muted)' }}>/100</div>
+    <div className="card card-glow-blue">
+      <div className="card-header">
+        <div className="card-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 13, height: 13 }}>
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          </svg>
+          Risk Score
         </div>
       </div>
+      <div className="card-inner" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
 
-      {/* Grade pill */}
-      <div style={{ marginBottom: 16 }}>
-        <span className="risk-score-grade" style={{ background: grade.bg, color: grade.color }}>
+        <div className="risk-ring-wrap" style={{ marginBottom: 10 }}>
+          <svg width="148" height="148" style={{ transform: 'rotate(-90deg)' }}>
+            <circle cx="74" cy="74" r={r} fill="none" stroke="var(--bg-elevated)" strokeWidth="9" />
+            <circle
+              cx="74" cy="74" r={r} fill="none"
+              stroke={col} strokeWidth="9"
+              strokeDasharray={circ} strokeDashoffset={off}
+              strokeLinecap="round"
+              style={{
+                transition: 'stroke-dashoffset 1s cubic-bezier(0.16,1,0.3,1)',
+                filter: `drop-shadow(0 0 8px ${col}60)`,
+              }}
+            />
+          </svg>
+          <div className="risk-ring-center">
+            <div className="risk-num" style={{ color: col }}>{s}</div>
+            <div className="risk-denom">/100</div>
+          </div>
+        </div>
+
+        <div className="risk-grade" style={{ background: grade.bg, color: grade.color, border: `1px solid ${grade.border}` }}>
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor', display: 'inline-block', flexShrink: 0 }} />
           {grade.label} RISK
-        </span>
-      </div>
+        </div>
 
-      {/* Stats row */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-        <div className="stat-card">
-          <div className="stat-card-label">Threats</div>
-          <div className="stat-card-value" style={{ color: 'var(--severity-high)', fontSize: 22 }}>{safeTotalThreats}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-card-label">Events</div>
-          <div className="stat-card-value" style={{ color: 'var(--accent-blue)', fontSize: 22 }}>{safeTotalEvents}</div>
+        {filename && (
+          <div style={{
+            marginTop: 12, fontFamily: 'var(--font-mono)', fontSize: 10,
+            color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap', maxWidth: '100%', textAlign: 'center', padding: '0 8px',
+          }}>
+            {filename}
+          </div>
+        )}
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 14, width: '100%' }}>
+          <div className="stat-mini">
+            <div className="stat-mini-label">Threats</div>
+            <div className="stat-mini-value" style={{ color: '#f97316', fontSize: 20 }}>{ths}</div>
+          </div>
+          <div className="stat-mini">
+            <div className="stat-mini-label">Events</div>
+            <div className="stat-mini-value" style={{ color: 'var(--blue)', fontSize: 20 }}>{evs}</div>
+          </div>
         </div>
       </div>
-
-      {filename && (
-        <div style={{ marginTop: 10, fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {filename}
-        </div>
-      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import React from 'react';
 
-function AiSection({ label, children }) {
+function Section({ label, children }) {
   return (
     <div className="ai-section">
       <div className="ai-section-label">{label}</div>
@@ -12,25 +12,30 @@ function AiSection({ label, children }) {
 export default function AiPanel({ analysis, loading, error, modelUsed }) {
   if (loading) {
     return (
-      <div className="loading-overlay">
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <div className="spinner" style={{ color: 'var(--accent-blue)' }} />
-          <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-            Running AI analysis...
+      <div className="loading-box">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div className="spinner" style={{ color: 'var(--blue)', width: 18, height: 18, borderWidth: 2 }} />
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>
+            Querying AI model...
           </span>
         </div>
-        <div className="loading-text">Querying language model for threat insights</div>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>
+          This may take 30–60 seconds
+        </div>
+        <div className="loading-bar" />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="alert alert-warn" style={{ flexDirection: 'column', gap: 4 }}>
-        <div style={{ fontWeight: 600, fontSize: 13 }}>AI Analysis Unavailable</div>
-        <div style={{ fontSize: 12 }}>{error}</div>
-        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-          Ensure Ollama is running: <code>ollama serve</code>
+      <div style={{ padding: '16px 0' }}>
+        <div className="alert alert-warn" style={{ flexDirection: 'column', gap: 6 }}>
+          <div style={{ fontWeight: 700, fontSize: 13 }}>AI Analysis Unavailable</div>
+          <div style={{ fontSize: 12, opacity: 0.85 }}>{error}</div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+            Run <code>ollama serve</code> to enable local AI analysis.
+          </div>
         </div>
       </div>
     );
@@ -39,44 +44,31 @@ export default function AiPanel({ analysis, loading, error, modelUsed }) {
   if (!analysis) {
     return (
       <div className="empty-state">
-        <div className="empty-state-icon">🤖</div>
-        <div className="empty-state-text">AI analysis will appear after upload</div>
+        <div className="empty-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: 20, height: 20 }}>
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
+          </svg>
+        </div>
+        <div className="empty-state-text">AI analysis pending</div>
+        <div className="empty-state-sub">Upload a log file to trigger analysis</div>
       </div>
     );
   }
 
+  const isFallback = modelUsed === 'rule-based-fallback';
+
   return (
     <div>
       {modelUsed && (
-        <div style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 6,
-          marginBottom: 14,
-          padding: '3px 9px',
-          background: 'var(--bg-surface)',
-          borderRadius: 'var(--radius-sm)',
-          fontSize: 10,
-          fontFamily: 'var(--font-mono)',
-          color: 'var(--text-muted)',
-          border: '1px solid var(--border)',
-        }}>
-          <span style={{ color: 'var(--accent-green)', fontSize: 8 }}>●</span>
-          {modelUsed === 'rule-based-fallback'
-            ? 'Rule-based fallback (Ollama offline)'
-            : modelUsed}
+        <div className="model-tag">
+          <span className="model-dot" style={{ background: isFallback ? 'var(--amber)' : 'var(--green)' }} />
+          {isFallback ? 'Rule-based fallback (Ollama offline)' : modelUsed}
         </div>
       )}
-
-      {analysis.explanation && (
-        <AiSection label="Threat Explanation">{analysis.explanation}</AiSection>
-      )}
-      {analysis.risk_assessment && (
-        <AiSection label="Risk Assessment">{analysis.risk_assessment}</AiSection>
-      )}
-      {analysis.recommendation && (
-        <AiSection label="Recommended Action">{analysis.recommendation}</AiSection>
-      )}
+      {analysis.explanation    && <Section label="Threat Explanation">{analysis.explanation}</Section>}
+      {analysis.risk_assessment && <Section label="Risk Assessment">{analysis.risk_assessment}</Section>}
+      {analysis.recommendation  && <Section label="Recommended Action">{analysis.recommendation}</Section>}
     </div>
   );
 }

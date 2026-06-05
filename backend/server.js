@@ -7,13 +7,14 @@ const { getDb } = require('./database/init');
 const uploadRoute = require('./routes/upload');
 const analyzeRoute = require('./routes/analyze');
 const reportRoute = require('./routes/report');
+const geoRoute    = require('./routes/geo');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 // ── Middleware ───────────────────────────────────────────────────────────────
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+  origin: true,
   methods: ['GET', 'POST', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
@@ -26,6 +27,7 @@ app.use(morgan('dev'));
 app.use('/api/upload', uploadRoute);
 app.use('/api/analyze-ai', analyzeRoute);
 app.use('/api/report', reportRoute);
+app.use('/api/geo', geoRoute);
 
 // Health check
 app.get('/api/health', (req, res) => {
