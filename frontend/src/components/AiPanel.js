@@ -124,7 +124,7 @@ export default function AiPanel({ analysis, loading, error, modelUsed }) {
           />
 
           {isFallback
-            ? 'Rule-based fallback (Groq unavailable)'
+            ? 'Rule-based fallback'
             : `Groq • ${modelUsed}`}
         </div>
       )}
