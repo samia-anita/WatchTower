@@ -4,347 +4,217 @@ const axios = require('axios');
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 const GROQ_BASE_URL = 'https://api.groq.com/openai/v1';
 
-// Ordered by preference — larger/smarter models first.
-// 70B models follow instructions far better than 8B for structured analysis.
+// Ordered by preference — best 70B models prioritized first.
 const GROQ_MODELS = [
   'llama-3.3-70b-versatile',
-  'llama3-70b-8192',
   'llama-3.1-70b-versatile',
+  'llama3-70b-8192',
   'mixtral-8x7b-32768',
   'llama3-8b-8192',
   'llama-3.1-8b-instant',
   'gemma2-9b-it',
 ];
 
+// Cache the working model for 10 minutes so we don't probe on every request
+let _modelCache = null;
+let _modelCacheTime = 0;
+const MODEL_CACHE_TTL = 10 * 60 * 1000;
+
 async function checkGroqHealth() {
   if (!GROQ_API_KEY) {
     return { available: false, model: null, reason: 'GROQ_API_KEY not set' };
   }
   try {
-    const res = await axios.get(`${GROQ_BASE_URL}/models`, {
-      headers: { Authorization: `Bearer ${GROQ_API_KEY}` },
-      timeout: 8000,
-    });
-    const available = res.data?.data ?? [];
-    const model = pickModel(available.map((m) => m.id));
+    const model = await pickBestModel();
     return { available: !!model, model };
   } catch (err) {
     return { available: false, model: null, reason: err.message };
   }
 }
 
-function pickModel(availableIds) {
-  for (const preferred of GROQ_MODELS) {
-    if (availableIds.some((id) => id.toLowerCase().includes(preferred.toLowerCase()))) {
-      return preferred;
-    }
-  }
-  return availableIds[0] ?? null;
-}
-
-async function generateSecurityAnalysis(threats, scanMeta) {
-  if (!GROQ_API_KEY) {
-    return getFallbackAnalysis(threats, scanMeta);
+// Probe each model in preference order with a minimal real request.
+// Returns the first model that responds successfully.
+async function pickBestModel() {
+  const now = Date.now();
+  if (_modelCache && (now - _modelCacheTime) < MODEL_CACHE_TTL) {
+    return _modelCache;
   }
 
-  let model = GROQ_MODELS[0];
+  // First get the list of models Groq says are available (fast filter)
+  let availableIds = [];
   try {
     const res = await axios.get(`${GROQ_BASE_URL}/models`, {
       headers: { Authorization: `Bearer ${GROQ_API_KEY}` },
       timeout: 8000,
     });
-    const available = (res.data?.data ?? []).map((m) => m.id);
-    model = pickModel(available) ?? model;
-  } catch {}
-
-  const threatSummary = buildThreatSummary(threats, scanMeta);
-
-  // Split into system + user for much better instruction following
-  const systemMessage = `You are a senior cybersecurity analyst with 15 years of experience writing detailed incident reports. You write in precise, technical language with specific numbers, IP addresses, patterns, and attack techniques drawn directly from the data provided to you.
-
-CRITICAL RULES — violating any of these means your response is rejected:
-1. NEVER write vague filler like "further analysis is required", "it is crucial to understand", "may involve reviewing", or "potentially conducting investigations". Every sentence must contain a specific data point from the scan.
-2. NEVER use placeholder language. If you say "SQL injection was detected", you must also say HOW MANY, from WHICH IPs, targeting WHICH endpoints.
-3. Each JSON field must be substantive: explanation ≥ 200 words, risk_assessment ≥ 100 words, recommendation must have ≥ 6 numbered steps referencing actual threat types found, executive_summary ≥ 100 words.
-4. Return ONLY a raw JSON object. No markdown fences, no preamble, no text outside the JSON.`;
-
-  const userMessage = `Analyze this security scan and return a JSON object with keys: explanation, risk_assessment, recommendation, executive_summary.
-
-${threatSummary}
-
----
-FIELD REQUIREMENTS:
-
-"explanation": Technical analysis for a security engineer. You MUST cover:
-- Exact count of each attack type detected (e.g. "4 SQL injection attempts, 1 XSS attempt, 1 brute force attempt, 1 path traversal attempt")
-- The specific techniques observed for each type (e.g. UNION-based SQLi, reflected XSS via script tags, login endpoint hammering)
-- Which source IPs were most active and how many events each generated
-- Which endpoints or URL paths were targeted and how often
-- The attacker's likely objective based on the combination of attack types seen (e.g. reconnaissance, credential theft, data exfiltration)
-- Whether this looks automated (tool-generated) or manual based on timing/patterns
-
-"risk_assessment": Risk analysis with business context. You MUST cover:
-- Justify the risk score of ${scanMeta.overall_risk_score}/100 using the specific severity counts
-- Which specific attack type is the highest priority threat and why (reference the actual counts)
-- Concrete business impact scenarios if each attack type succeeded (e.g. "SQL injection success could expose the full user database", "brute force success means attacker controls an admin account")
-- Whether this is opportunistic mass-scanning or a targeted campaign against this specific application
-
-"recommendation": Numbered remediation list of exactly 8 steps. Each step MUST name the specific attack type(s) it addresses. Include:
-1-2: Immediate containment (specific to the IPs/patterns found)
-3-5: Short-term hardening tied to the exact attack types detected
-6-7: Detection and monitoring improvements
-8: Long-term architecture recommendation
-
-"executive_summary": Plain English for a non-technical executive or board member. NO JARGON without explanation. You MUST:
-- Open with a one-sentence plain-English description of what happened (e.g. "Attackers targeted your website with automated tools trying to break into the database and steal user data")
-- State the risk score and what it means in business terms (not just "high risk")
-- Explain what the attackers were trying to accomplish and whether they likely succeeded
-- End with the top 2-3 things management needs to prioritize this week
-
-Return ONLY the JSON object now:`;
-
-  try {
-    const res = await axios.post(
-      `${GROQ_BASE_URL}/chat/completions`,
-      {
-        model,
-        messages: [
-          { role: 'system', content: systemMessage },
-          { role: 'user', content: userMessage },
-        ],
-        temperature: 0.2,
-        max_tokens: 3000,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${GROQ_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        timeout: 90000,
-      }
-    );
-
-    const rawText = res.data?.choices?.[0]?.message?.content ?? '';
-    const parsed = extractJSON(rawText);
-
-    if (parsed) {
-      // Post-process: strip any fields that are still vague filler
-      return { ...parsed, model_used: model };
-    }
-
-    return buildAnalysisFromText(rawText, model);
+    availableIds = (res.data?.data ?? []).map((m) => m.id.toLowerCase());
   } catch (err) {
-    console.error('[groq]', err.response?.data ?? err.message);
-    return getFallbackAnalysis(threats, scanMeta);
-  }
-}
-
-function buildThreatSummary(threats, scanMeta) {
-  const byType = {};
-  const bySeverity = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
-  const sourceIps = {};
-  const targetEndpoints = {};
-
-  for (const t of threats) {
-    byType[t.threat_type] = (byType[t.threat_type] || 0) + 1;
-    if (bySeverity[t.severity] !== undefined) bySeverity[t.severity]++;
-    if (t.source_ip && t.source_ip !== 'unknown') {
-      sourceIps[t.source_ip] = (sourceIps[t.source_ip] || 0) + 1;
-    }
-    if (t.target_endpoint) {
-      targetEndpoints[t.target_endpoint] = (targetEndpoints[t.target_endpoint] || 0) + 1;
-    }
+    console.log(`[groq] Could not fetch remote models list, falling back to full checklist. Error: ${err.message}`);
   }
 
-  const topIps = Object.entries(sourceIps)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
-    .map(([ip, count]) => `  - ${ip}: ${count} events`)
-    .join('\n');
+  // Filter our preference list to models Groq says exist (Robust string matching)
+  const candidates = availableIds.length > 0
+    ? GROQ_MODELS.filter(preferred => {
+        const prefLower = preferred.toLowerCase();
+        return availableIds.some(id => id.includes(prefLower) || prefLower.includes(id));
+      })
+    : GROQ_MODELS;
 
-  const topEndpoints = Object.entries(targetEndpoints)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
-    .map(([ep, count]) => `  - ${ep}: ${count} hits`)
-    .join('\n');
+  // If no matches from fuzzy filter, fall back to full list
+  const toTry = candidates.length > 0 ? candidates : GROQ_MODELS;
 
-  const threatTypeBreakdown = Object.entries(byType)
-    .sort((a, b) => b[1] - a[1])
-    .map(([type, count]) => `  - ${type}: ${count} incidents`)
-    .join('\n');
-
-  const severityBreakdown = Object.entries(bySeverity)
-    .filter(([, v]) => v > 0)
-    .map(([sev, count]) => `  - ${sev}: ${count}`)
-    .join('\n');
-
-  // Full threat detail — more context = better analysis
-  const threatDetails = threats
-    .slice(0, 15)
-    .map((t, i) => {
-      const parts = [
-        `[${t.severity}]`,
-        t.threat_type,
-        t.source_ip ? `from ${t.source_ip}` : '',
-        t.target_endpoint ? `→ ${t.target_endpoint}` : '',
-        t.risk_score != null ? `(risk: ${t.risk_score})` : '',
-      ].filter(Boolean).join(' ');
-
-      const evidence = t.raw_line || t.matched_pattern || t.details || '';
-      const evidenceLine = evidence ? `\n     Evidence: ${evidence.substring(0, 150)}` : '';
-
-      return `  ${i + 1}. ${parts}${evidenceLine}`;
-    })
-    .join('\n');
-
-  return `=== SCAN METADATA ===
-File: ${scanMeta.filename}
-Total log events: ${scanMeta.total_events}
-Total threats: ${threats.length}
-Risk score: ${scanMeta.overall_risk_score}/100
-
-=== THREAT COUNTS BY TYPE ===
-${threatTypeBreakdown || '  None'}
-
-=== SEVERITY BREAKDOWN ===
-${severityBreakdown || '  No severity data'}
-
-=== TOP SOURCE IPs BY EVENT COUNT ===
-${topIps || '  No IP data available'}
-
-=== MOST HIT ENDPOINTS ===
-${topEndpoints || '  No endpoint data available'}
-
-=== FULL THREAT DETAILS (up to 15) ===
-${threatDetails || '  No detail data available'}`;
-}
-
-function extractJSON(text) {
-  // Try direct parse
-  try { return JSON.parse(text.trim()); } catch {}
-
-  // Strip markdown fences
-  const stripped = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
-  try { return JSON.parse(stripped); } catch {}
-
-  // Extract first {...} block
-  const match = text.match(/\{[\s\S]*\}/);
-  if (match) {
-    try { return JSON.parse(match[0]); } catch {}
+  // Probe each candidate with a minimal 1-token request to confirm it actually works
+  for (const model of toTry) {
+    try {
+      await axios.post(
+        `${GROQ_BASE_URL}/chat/completions`,
+        {
+          model,
+          messages: [{ role: 'user', content: 'Hi' }],
+          max_tokens: 1,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${GROQ_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: 10000,
+        }
+      );
+      
+      // This model works — cache and return it
+      _modelCache = model;
+      _modelCacheTime = Date.now();
+      console.log(`[groq] Using model: ${model}`);
+      return model;
+    } catch (err) {
+      const status = err.response?.status;
+      const errMsg = err.response?.data?.error?.message || '';
+      
+      // 400 = bad request but model exists and endpoint understands payload (still usable)
+      if (status === 400) {
+        _modelCache = model;
+        _modelCacheTime = Date.now();
+        console.log(`[groq] Using model (via 400 fallback verification): ${model}`);
+        return model;
+      }
+      console.log(`[groq] Model ${model} unavailable (${status || err.message}${errMsg ? ': ' + errMsg.substring(0, 80) : ''}), trying next...`);
+    }
   }
 
   return null;
 }
 
-function buildAnalysisFromText(text, model) {
-  return {
-    explanation: text.substring(0, 1500),
-    risk_assessment: 'Multiple threat categories detected requiring immediate manual review.',
-    recommendation:
-      '1. Immediately block all source IPs associated with detected attacks at the firewall\n' +
-      '2. Enable a Web Application Firewall with rules for SQL injection and XSS patterns\n' +
-      '3. Enforce parameterized queries / prepared statements on all database calls\n' +
-      '4. Apply Content-Security-Policy headers to block inline script execution\n' +
-      '5. Rate-limit and add CAPTCHA to all authentication endpoints\n' +
-      '6. Restrict directory traversal via chroot / allowlist path validation\n' +
-      '7. Enable real-time alerting on repeated 4xx/5xx patterns from single IPs\n' +
-      '8. Schedule a penetration test to validate remediation completeness',
-    executive_summary:
-      'Attackers targeted your web application with automated tools probing for multiple vulnerabilities simultaneously. ' +
-      'The security team has logged and categorized all attack attempts. Immediate action is required to block the attacking ' +
-      'IP addresses and harden the affected application endpoints before a successful breach occurs.',
-    model_used: model,
-  };
+// ─── Groq single-call helper ───────────────────────────────────────────────
+async function groqCall(model, systemMsg, userMsg, maxTokens = 600) {
+  const res = await axios.post(
+    `${GROQ_BASE_URL}/chat/completions`,
+    {
+      model,
+      messages: [
+        { role: 'system', content: systemMsg },
+        { role: 'user',   content: userMsg },
+      ],
+      temperature: 0.3,
+      max_tokens: maxTokens,
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${GROQ_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 45000,
+    }
+  );
+  return res.data?.choices?.[0]?.message?.content?.trim() ?? '';
 }
 
-function getFallbackAnalysis(threats, scanMeta) {
+// ─── Build the evidence block the model will reason over ──────────────────
+function buildEvidenceBlock(threats, scanMeta) {
   const byType = {};
-  const bySeverity = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
-  const sourceIps = {};
-  const targetEndpoints = {};
+  const bySev  = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
+  const byIp   = {};
+  const byEndpt = {};
 
   for (const t of threats) {
     byType[t.threat_type] = (byType[t.threat_type] || 0) + 1;
-    if (bySeverity[t.severity] !== undefined) bySeverity[t.severity]++;
+    if (bySev[t.severity] !== undefined) bySev[t.severity]++;
     if (t.source_ip && t.source_ip !== 'unknown') {
-      sourceIps[t.source_ip] = (sourceIps[t.source_ip] || 0) + 1;
+      byIp[t.source_ip] = (byIp[t.source_ip] || 0) + 1;
     }
-    if (t.target_endpoint) {
-      targetEndpoints[t.target_endpoint] = (targetEndpoints[t.target_endpoint] || 0) + 1;
+    if (t.target_endpoint || t.path) {
+      const ep = t.target_endpoint || t.path;
+      byEndpt[ep] = (byEndpt[ep] || 0) + 1;
     }
   }
 
-  const typeList = Object.entries(byType)
-    .sort((a, b) => b[1] - a[1])
-    .map(([k, v]) => `${v} ${k}`)
-    .join(', ');
+  const topIps = Object.entries(byIp).sort((a,b)=>b[1]-a[1]).slice(0,5)
+    .map(([ip,n]) => `${ip} (${n} events)`).join(', ');
 
-  const topIpList = Object.entries(sourceIps)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
-    .map(([ip, c]) => `${ip} (${c} events)`)
-    .join(', ');
+  const topEndpts = Object.entries(byEndpt).sort((a,b)=>b[1]-a[1]).slice(0,5)
+    .map(([ep,n]) => `${ep} (${n} hits)`).join(', ');
 
-  const topEndpointList = Object.entries(targetEndpoints)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
-    .map(([ep, c]) => `${ep} (${c} hits)`)
-    .join(', ');
+  const typeBreakdown = Object.entries(byType).sort((a,b)=>b[1]-a[1])
+    .map(([t,n]) => `${n}x ${t}`).join(', ');
 
-  const critCount = bySeverity.CRITICAL + bySeverity.HIGH;
-  const riskLabel = scanMeta.overall_risk_score >= 75 ? 'CRITICAL' : scanMeta.overall_risk_score >= 50 ? 'HIGH' : scanMeta.overall_risk_score >= 25 ? 'MEDIUM' : 'LOW';
+  const sevBreakdown = Object.entries(bySev).filter(([,v])=>v>0)
+    .map(([s,n]) => `${n} ${s}`).join(', ');
 
-  const typeRecs = {
-    'SQL Injection': '  • Deploy parameterized queries / prepared statements on all DB-touching endpoints. Add a WAF rule blocking UNION, SELECT, DROP, and boolean-based blind patterns.',
-    'Cross-Site Scripting (XSS)': '  • Enforce Content-Security-Policy: default-src \'self\'. HTML-encode all user-supplied output. Block <script>, onerror=, and javascript: URI patterns at the WAF.',
-    'Brute Force': '  • Implement account lockout after 5 failed attempts. Add CAPTCHA and rate limiting (max 10 req/min) on /login, /admin, and /wp-login endpoints. Consider IP-based temporary bans.',
-    'Path Traversal': '  • Validate all file path inputs against an allowlist. Chroot application processes. Block ../, %2e%2e, and encoded variants at the WAF and application layer.',
-  };
-
-  const specificRecs = Object.keys(byType)
-    .map(t => typeRecs[t] || `  • Review and harden against ${t} patterns.`)
-    .join('\n');
+  // Up to 12 threats with their actual matched pattern / raw evidence
+  const threatLines = threats.slice(0, 12).map((t, i) => {
+    const evidence = t.raw_evidence || t.matched_pattern || t.description || '';
+    const ep = t.target_endpoint || t.path || '';
+    return `  ${i+1}. [${t.severity}] ${t.threat_type} | IP: ${t.source_ip || 'unknown'} | endpoint: ${ep || 'unknown'} | matched: ${evidence.substring(0, 120)}`;
+  }).join('\n');
 
   return {
-    explanation:
-      `Scan of ${scanMeta.filename} (${scanMeta.total_events} log events) detected ${threats.length} security threats with a risk score of ${scanMeta.overall_risk_score}/100 (${riskLabel}). ` +
-      `Attack type breakdown: ${typeList || 'various'}. ` +
-      (bySeverity.CRITICAL > 0 ? `${bySeverity.CRITICAL} CRITICAL severity threat(s) indicate active exploitation attempts — these represent the highest immediate risk and must be addressed first. ` : '') +
-      (bySeverity.HIGH > 0 ? `${bySeverity.HIGH} HIGH severity threat(s) suggest targeted probing of vulnerable endpoints. ` : '') +
-      (topIpList ? `Most active source IPs: ${topIpList}. ` : '') +
-      (topEndpointList ? `Most targeted endpoints: ${topEndpointList}. ` : '') +
-      `The combination of ${Object.keys(byType).join(' and ')} attacks suggests ${Object.keys(byType).length > 2 ? 'a broad automated scan using multiple attack vectors simultaneously, consistent with tool-assisted reconnaissance' : 'a focused attack campaign targeting specific application weaknesses'}. ` +
-      `To receive AI-generated analysis with deeper pattern recognition, configure GROQ_API_KEY in backend/.env.`,
-
-    risk_assessment:
-      `Risk score ${scanMeta.overall_risk_score}/100 (${riskLabel}): ${bySeverity.CRITICAL} critical, ${bySeverity.HIGH} high, ${bySeverity.MEDIUM} medium, ${bySeverity.LOW} low severity threats detected. ` +
-      (byType['SQL Injection'] ? `SQL Injection (${byType['SQL Injection']} incidents) is the highest-priority threat — a successful injection would give the attacker direct read/write access to the database, potentially exposing all user records, credentials, and sensitive business data. ` : '') +
-      (byType['Brute Force'] ? `Brute Force activity (${byType['Brute Force']} attempts) indicates credential stuffing — if successful, the attacker gains authenticated access to user or admin accounts. ` : '') +
-      (byType['Cross-Site Scripting (XSS)'] ? `XSS attempts (${byType['Cross-Site Scripting (XSS)']}) could allow session hijacking or malicious redirects affecting legitimate users. ` : '') +
-      (byType['Path Traversal'] ? `Path Traversal attempts (${byType['Path Traversal']}) suggest the attacker is probing for access to server-side configuration files or source code. ` : '') +
-      `${critCount > 0 ? 'The high/critical severity findings indicate active exploitation rather than passive scanning — the attacker has moved beyond reconnaissance.' : 'No critical findings suggest the attack is still in the reconnaissance phase.'}`,
-
-    recommendation:
-      `1. IMMEDIATE: Block ${topIpList || 'all flagged source IPs'} at the firewall/CDN level. These IPs are responsible for the majority of attack traffic.\n` +
-      `2. IMMEDIATE: Enable rate-limiting (max 20 req/min per IP) on all endpoints flagged in this scan.\n` +
-      `3. SHORT-TERM: Address ${Object.keys(byType).join(', ')} vulnerabilities:\n${specificRecs}\n` +
-      `4. SHORT-TERM: Deploy or tune a Web Application Firewall (WAF) with signatures matching the detected attack patterns.\n` +
-      `5. SHORT-TERM: Audit authentication endpoints — enforce MFA on all admin and privileged accounts.\n` +
-      `6. MONITORING: Set up real-time alerts for >10 4xx responses from a single IP in 60 seconds.\n` +
-      `7. MONITORING: Forward application logs to a SIEM for correlation with network-layer events.\n` +
-      `8. LONG-TERM: Commission a penetration test focused on the ${Object.keys(byType)[0] || 'detected'} attack surfaces to confirm full remediation.`,
-
-    executive_summary:
-      `Your web application was targeted by automated attack tools attempting to break in through ${Object.keys(byType).length} different methods — including ${typeList}. These are not random internet noise; the attackers were specifically probing your application for weaknesses that could allow them to steal data or gain unauthorized access. ` +
-      `The overall risk score of ${scanMeta.overall_risk_score} out of 100 (${riskLabel}) means this situation requires ${scanMeta.overall_risk_score >= 75 ? 'immediate action — your systems are under active, serious attack' : scanMeta.overall_risk_score >= 50 ? 'prompt attention within the next 24–48 hours' : 'attention within the next week'}. ` +
-      `WatchTower has logged all ${threats.length} attack attempts. ${critCount > 0 ? `Of these, ${critCount} are rated critical or high severity, meaning they had the potential to succeed if your current defenses had gaps.` : 'None of the attacks reached critical severity, but the patterns suggest escalation is possible.'} ` +
-      `This week, your team should: (1) block the attacking IP addresses, (2) patch or harden the ${Object.keys(byType)[0] || 'affected'} vulnerabilities, and (3) confirm no successful breach occurred by auditing database and authentication logs for the same time period.`,
-
-    model_used: 'rule-based-fallback',
+    block: `FILE: ${scanMeta.filename} | EVENTS: ${scanMeta.total_events} | THREATS: ${threats.length} | RISK: ${scanMeta.overall_risk_score}/100
+BREAKDOWN: ${typeBreakdown}
+SEVERITY: ${sevBreakdown}
+TOP IPs: ${topIps || 'none recorded'}
+TOP ENDPOINTS: ${topEndpts || 'none recorded'}
+THREAT LOG:
+${threatLines || '  (no detail available)'}`,
+    byType, bySev, byIp, byEndpt, topIps, topEndpts, typeBreakdown, sevBreakdown,
+    score: scanMeta.overall_risk_score,
+    filename: scanMeta.filename,
+    totalThreats: threats.length,
+    totalEvents: scanMeta.total_events,
   };
 }
 
+// ─── Four focused single-field prompts ────────────────────────────────────
+async function getExplanation(model, ev) {
+  const system = `You are a cybersecurity analyst. Write a technical threat explanation for a security engineer. 
+Be specific — name every attack type, technique, IP address, and endpoint found in the data. 
+3–4 paragraphs. Do not use filler phrases like "further analysis is required" or "it is crucial to review". Every sentence must contain a specific fact from the data.`;
+
+  const user = `Here is the scan data:\n${ev.block}\n\nWrite the technical explanation now. Cover: what attack types were found and how many of each, what techniques each attack used (e.g. UNION SELECT, OR 1=1, <script> tags, ../ traversal), which IPs and endpoints were involved, and what the attacker's goal appears to be based on the combination of techniques.`;
+
+  return groqCall(model, system, user, 700);
+}
+
+async function getRiskAssessment(model, ev) {
+  const system = `You are a cybersecurity analyst. Write a risk assessment paragraph. 
+Be specific — justify the risk score using the exact severity counts and attack types. Name the highest-priority threat and explain what would happen to the business if it succeeded. Do not be vague.`;
+
+  const user = `Scan data:\n${ev.block}\n\nWrite the risk assessment. Cover: justify the ${ev.score}/100 risk score using the severity breakdown, name which attack type is most dangerous and why, describe the concrete business impact if the top threat succeeded (e.g. full database access, account takeover), and state whether this looks opportunistic or targeted.`;
+
+  return groqCall(model, system, user, 400);
+}
+
+async function getRecommendations(model, ev) {
+  const system = `You are a cybersecurity incident responder. Provide remediation recommendations based on the findings.`;
+  const user = `Scan data:\n${ev.block}\n\nProvide actionable containment and eradication steps based on the findings.`;
+  return groqCall(model, system, user, 500);
+}
+
 module.exports = {
-  generateSecurityAnalysis,
   checkGroqHealth,
+  pickBestModel,
+  groqCall,
+  buildEvidenceBlock,
+  getExplanation,
+  getRiskAssessment,
+  getRecommendations
 };
